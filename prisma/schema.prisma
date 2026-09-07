@@ -1,0 +1,284 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum BusinessType {
+  PROPRIETORSHIP
+  PARTNERSHIP
+  LLP
+  PRIVATE_LIMITED
+  PUBLIC_LIMITED
+  OTHER
+}
+
+enum DocumentCategory {
+  COMPANY
+  IDENTITY
+  CERTIFICATE
+  FINANCIAL
+  TECHNICAL
+  OTHER
+}
+
+enum DocumentStatus {
+  VALID
+  EXPIRING
+  EXPIRED
+  MISSING
+  PENDING_VERIFICATION
+}
+
+enum AnalysisStatus {
+  QUEUED
+  PROCESSING
+  COMPLETE
+  FAILED
+  NEEDS_MANUAL_VERIFICATION
+}
+
+enum EligibilityStatus {
+  ELIGIBLE
+  NOT_ELIGIBLE
+  PARTIALLY_ELIGIBLE
+  DOCUMENT_MISSING
+  INFORMATION_REQUIRED
+  NOT_APPLICABLE
+  NEEDS_MANUAL_VERIFICATION
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  TRIAL
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String
+  role          Role      @default(USER)
+  emailVerified Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  resetToken       String?
+  resetTokenExpiry DateTime?
+
+  profile       CompanyProfile?
+  documents     Document[]
+  tenders       TenderAnalysis[]
+  subscription  Subscription?
+  auditLogs     AuditLog[]
+
+  @@index([email])
+}
+
+model CompanyProfile {
+  id       String @id @default(cuid())
+  userId   String @unique
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  companyName       String
+  authorizedPerson  String
+  businessType      BusinessType
+  registeredAddress String
+  city              String
+  state             String
+  pincode           String
+  mobile            String
+  email             String
+  website           String?
+
+  gstNumber      String?
+  panNumber      String?
+  udyamNumber    String?
+  startupRegNo   String?
+  nsicRegNo      String?
+  gemSellerId    String?
+  cin            String?
+  tradeLicenseNo String?
+
+  annualTurnover      Decimal? @db.Decimal(14, 2)
+  avgTurnover3yr      Decimal? @db.Decimal(14, 2)
+  netWorth            Decimal? @db.Decimal(14, 2)
+  turnoverNotes       String?
+
+  yearsExperience     Int?
+  experienceNotes     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Document {
+  id           String            @id @default(cuid())
+  userId       String
+  user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name         String
+  category     DocumentCategory
+  fileKey      String            // storage key/path, never a public URL
+  fileName     String
+  mimeType     String
+  sizeBytes    Int
+
+  status       DocumentStatus    @default(PENDING_VERIFICATION)
+  uploadedAt   DateTime          @default(now())
+  expiryDate   DateTime?
+  verifiedAt   DateTime?
+  notes        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, category])
+}
+
+model SubscriptionPlan {
+  id            String   @id @default(cuid())
+  code          String   @unique // e.g. "basic", "professional", "business"
+  name          String
+  priceInPaise  Int      // 0 for "custom" plans handled via sales
+  analysesLimit Int      // -1 = unlimited
+  features      Json
+  isActive      Boolean  @default(true)
+  sortOrder     Int      @default(0)
+
+  subscriptions Subscription[]
+}
+
+model Subscription {
+  id         String              @id @default(cuid())
+  userId     String              @unique
+  user       User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planId     String
+  plan       SubscriptionPlan    @relation(fields: [planId], references: [id])
+
+  status          SubscriptionStatus @default(TRIAL)
+  analysesUsed    Int                @default(0)
+  cycleStartedAt  DateTime           @default(now())
+  cycleEndsAt     DateTime?
+  razorpaySubId   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model TenderAnalysis {
+  id       String @id @default(cuid())
+  userId   String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  sourceFileKey String
+  sourceFileName String
+
+  status   AnalysisStatus @default(QUEUED)
+  errorMessage String?
+
+  // Extracted tender metadata
+  title          String?
+  refNumber      String?
+  tenderId       String?
+  organization   String?
+  tenderType     String?
+  isGem          Boolean?
+  tenderValue    String?
+  emd            String?
+  tenderFee      String?
+  bidStartDate   DateTime?
+  bidEndDate     DateTime?
+  bidOpeningDate DateTime?
+  location       String?
+  quantity       String?
+  description    String?
+  deliveryPeriod String?
+  contractPeriod String?
+
+  summaryText String?
+
+  overallScore   Int?
+  scoreBreakdown Json?   // { registration, financial, experience, technical, certificates, documents }
+  eligibilityStatus EligibilityStatus?
+
+  criteria         EligibilityCriterion[]
+  checklistItems   ChecklistItem[]
+  missingDocuments MissingDocument[]
+  riskFlags        Json?    // string[] of flagged contradictions/ambiguities
+  finalRecommendation String?
+
+  rawAiResponse Json?  // full structured JSON returned by the AI, for audit/debug
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, createdAt])
+}
+
+model EligibilityCriterion {
+  id         String            @id @default(cuid())
+  analysisId String
+  analysis   TenderAnalysis    @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+
+  category    String   // Registration | Financial | Experience | Technical | Certificate | Other
+  requirement String
+  clientData  String?
+  status      EligibilityStatus
+  pageRef     String?
+  evidence    String?
+
+  @@index([analysisId])
+}
+
+model ChecklistItem {
+  id         String         @id @default(cuid())
+  analysisId String
+  analysis   TenderAnalysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+
+  section     String   // one of the 10 fixed checklist categories
+  requirement String
+  pageRef     String?
+  mandatory   Boolean  @default(true)
+  clientStatus String  // Available | Missing | Not applicable | Not yet prepared | Expiring...
+  documentId  String?  // linked Document, if matched
+
+  @@index([analysisId])
+}
+
+model MissingDocument {
+  id         String         @id @default(cuid())
+  analysisId String
+  analysis   TenderAnalysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+
+  name       String
+  reason     String
+  pageRef    String?
+  mandatory  Boolean @default(true)
+  replaceableWith String?
+  deadlineNote    String?
+
+  @@index([analysisId])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action    String
+  targetType String?
+  targetId   String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
