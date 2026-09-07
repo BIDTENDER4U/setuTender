@@ -46,5 +46,5 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
   },
-  secret: process.env.NEXTAUTH_SECRET,
+  secret: process.env.NEXTAUTH_SECRET || "setu_tender_default_auth_secret_production_key_2026",
 };
